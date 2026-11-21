@@ -9,7 +9,7 @@ def build_model():
     
     model = smp.Unet(
         encoder_name="resnet34",
-        encode_weights="None",
+        encode_weights=None,
         in_channels=3,
         classes=6,
         activation=None
