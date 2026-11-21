@@ -7,7 +7,13 @@ from .config import CLASS_WEIGHTS
 from .evaluate import MEAN, STD
 
 
-def train_one_epoch(model, loader, optimizer, device):
+def train_one_epoch(
+    model,
+    loader,
+    optimizer,
+    device,
+    class_weights=None
+):
     """Train model for one epoch."""
 
     model.train()
@@ -22,8 +28,16 @@ def train_one_epoch(model, loader, optimizer, device):
     ).view(1, 3, 1, 1)
 
     # Weighted Cross Entropy
+    selected_weights = (
+        CLASS_WEIGHTS
+        if class_weights is None
+        else class_weights
+    )
+
     weights = torch.tensor(
-        CLASS_WEIGHTS, device=device
+        selected_weights,
+        device=device,
+        dtype=torch.float32
     )
 
     ce_loss = nn.CrossEntropyLoss(

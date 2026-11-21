@@ -27,9 +27,18 @@ available_runs = sorted(
 
 assert available_runs, "No saved checkpoints found"
 
-RUN_DIR = available_runs[-1]
+
+# Pilih checkpoint dari training penuh 111 gambar
+RUN_DIR = (
+    ROOT
+    / "runs"
+    / "20261121_132717_22f682"
+)
+
+assert RUN_DIR.exists(), "Run directory not found"
 
 print("Verifying run:", RUN_DIR.name)
+
 
 
 checkpoint_path = RUN_DIR / "best_model.pth"
@@ -64,6 +73,61 @@ loader = DataLoader(
 
 # 4. Evaluasi ulang checkpoint
 cm = evaluate_model(model, loader, device)
+# Hitung piksel aktual dan prediksi per kelas
+class_names = [
+    "Background",
+    "Epithelial",
+    "Slough",
+    "Granulation",
+    "Necrotic",
+    "Other"
+]
+
+true_pixels = cm.sum(dim=1)
+pred_pixels = cm.sum(dim=0)
+
+print("\nVALIDATION CLASS DISTRIBUTION")
+print("-" * 55)
+
+for i, name in enumerate(class_names):
+    print(
+        f"{name:13} | "
+        f"GT: {true_pixels[i].item():>10,} | "
+        f"Pred: {pred_pixels[i].item():>10,}"
+    )
+
+
+# Analisis kesalahan khusus kelas Necrotic
+NECROTIC = 4
+
+necrotic_row = cm[NECROTIC]
+total_necrotic = necrotic_row.sum().item()
+
+print("\nNECROTIC ERROR ANALYSIS")
+print("-" * 50)
+
+for i, name in enumerate(class_names):
+    count = necrotic_row[i].item()
+    percentage = 100 * count / total_necrotic
+
+    print(
+        f"GT Necrotic -> {name:13}: "
+        f"{count:>7,} pixels ({percentage:.2f}%)"
+    )
+
+# Hitung precision dan recall Necrotic
+tp = cm[NECROTIC, NECROTIC].item()
+predicted_total = cm[:, NECROTIC].sum().item()
+
+precision = tp / predicted_total if predicted_total else 0
+recall = tp / total_necrotic if total_necrotic else 0
+
+print("\nNECROTIC PERFORMANCE")
+print("-" * 50)
+print(f"Precision : {precision * 100:.2f}%")
+print(f"Recall    : {recall * 100:.2f}%")
+
+
 metrics = calculate_metrics(cm)
 
 # 5. Baca hasil yang tersimpan saat training

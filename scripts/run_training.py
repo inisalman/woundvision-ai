@@ -13,7 +13,11 @@ from torch.utils.data import DataLoader, Subset
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from woundvision.config import DATA_ROOT, CHECKPOINT_V02
+from woundvision.config import (
+    DATA_ROOT,
+    CHECKPOINT_V02,
+    CLASS_WEIGHTS
+)
 from woundvision.data import WoundDataset
 from woundvision.model import build_model
 from woundvision.train import train_one_epoch
@@ -32,7 +36,21 @@ parser.add_argument("--epochs", type=int, default=1)
 parser.add_argument("--batch-size", type=int, default=2)
 parser.add_argument("--max-train-samples", type=int, default=4)
 
+parser.add_argument(
+    "--necrotic-weight",
+    type=float,
+    default=3.0
+)
+
 args = parser.parse_args()
+
+import math
+
+assert math.isfinite(args.necrotic_weight)
+assert args.necrotic_weight > 0
+
+class_weights = CLASS_WEIGHTS.copy()
+class_weights[4] = args.necrotic_weight
 
 # Reproducibility
 SEED = args.seed
@@ -129,6 +147,8 @@ experiment_config = {
     "train_images": len(train_dataset),
     "validation_images": len(val_dataset),
     "starting_checkpoint": CHECKPOINT_V02.name,
+    "class_weights": class_weights,
+    "checkpoint_metric": "clinical_3_dice",
     "device": str(device)
 }
 
@@ -140,8 +160,11 @@ config_path.write_text(
 )
 
 print("Experiment ID:", run_id)
+print("Necrotic Class Weight:", args.necrotic_weight)
 
 
+
+# Evaluasi checkpoint awal sebelum training
 # Evaluasi checkpoint awal sebelum training
 baseline_cm = evaluate_model(
     model, val_loader, device
@@ -149,13 +172,19 @@ baseline_cm = evaluate_model(
 
 baseline_metrics = calculate_metrics(baseline_cm)
 
-best_macro = baseline_metrics["macro_tissue_dice"]
+# Clinical Dice: Slough, Granulation, Necrotic
+best_clinical = sum(
+    baseline_metrics["dice_per_class"][i]
+    for i in (2, 3, 4)
+) / 3
+
 best_epoch = 0
 
 best_checkpoint_path = run_dir / "best_model.pth"
 
 print(
-    f"Starting Macro Dice: {best_macro * 100:.2f}%"
+    f"Starting Clinical 3 Dice: "
+    f"{best_clinical * 100:.2f}%"
 )
 
 
@@ -165,7 +194,8 @@ for epoch in range(1, args.epochs + 1):
         model,
         train_loader,
         optimizer,
-        device
+        device,
+        class_weights=class_weights
     )
 
     cm = evaluate_model(
@@ -175,6 +205,13 @@ for epoch in range(1, args.epochs + 1):
     )
 
     metrics = calculate_metrics(cm)
+
+    # Rata-rata Dice tiga jaringan klinis utama
+    # 2 = slough, 3 = Granulation, 4 = Necrotic
+    clinical_3_dice = sum(
+        metrics["dice_per_class"][i]
+        for i in (2, 3, 4)
+    ) / 3
 
     print(f"\nEPOCH {epoch}")
     print("-" * 40)
@@ -187,6 +224,12 @@ for epoch in range(1, args.epochs + 1):
         "Wound Dice:",
         f"{metrics['wound_dice'] * 100:.2f}%"
     )
+
+    print(
+        "Clinical 3-Class Dice:",
+        f"{clinical_3_dice * 100:.2f}%"
+    )
+
 
     # Monitoring Dice setiap kelas jaringan
     class_names = [
@@ -214,6 +257,7 @@ for epoch in range(1, args.epochs + 1):
         "train_loss": train_loss,
         "macro_tissue_dice": metrics["macro_tissue_dice"],
         "wound_dice": metrics["wound_dice"],
+        "clinical_3_dice": clinical_3_dice,
         "pixel_accuracy": metrics["pixel_accuracy"],
         "dice_per_class": {
             "Background": metrics["dice_per_class"][0],
@@ -230,10 +274,11 @@ for epoch in range(1, args.epochs + 1):
 
     # Simpan jika Macro Tissue Dice meningkat
     current_macro = metrics["macro_tissue_dice"]
+    current_clinical = clinical_3_dice
 
-    if current_macro > best_macro:
+    if current_clinical > best_clinical:
 
-        best_macro = current_macro
+        best_clinical = current_clinical
         best_epoch = epoch
 
         checkpoint_data = {
@@ -245,6 +290,7 @@ for epoch in range(1, args.epochs + 1):
             "wound_dice": metrics["wound_dice"],
             "dice_per_class": metrics["dice_per_class"],
             "train_images": len(train_dataset),
+            "clinical_3_dice": current_clinical,
             "starting_checkpoint": CHECKPOINT_V02.name
         }
 
@@ -259,7 +305,7 @@ for epoch in range(1, args.epochs + 1):
         print(
             f"Best checkpoint saved! "
             f"Epoch {best_epoch} | "
-            f"Macro Dice: {best_macro * 100:.2f}%"
+            f"Clinical 3 Dice: {best_clinical * 100:.2f}%"
         )
 
 
@@ -275,7 +321,10 @@ print("\nBEST MODEL SUMMARY")
 print("-" * 45)
 
 print("Best epoch:", best_epoch)
-print(f"Best Macro Dice: {best_macro * 100:.2f}%")
+print(
+    f"Best Clinical 3 Dice: "
+    f"{best_clinical * 100:.2f}%"
+)
 
 if best_epoch > 0:
     print("Checkpoint:", best_checkpoint_path)
