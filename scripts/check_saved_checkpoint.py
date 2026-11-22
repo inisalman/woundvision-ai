@@ -1,8 +1,9 @@
-
 from pathlib import Path
 import sys
 import json
 import torch
+from collections import defaultdict
+from torch.utils.data import Subset
 
 from torch.utils.data import DataLoader
 
@@ -12,6 +13,8 @@ sys.path.insert(0, str(ROOT / "src"))
 from woundvision.model import build_model
 from woundvision.data import WoundDataset
 from woundvision.evaluate import evaluate_model, calculate_metrics
+from woundvision.config import CHECKPOINT_V02
+
 
 # Folder eksperimen yang baru selesai
 
@@ -32,7 +35,7 @@ assert available_runs, "No saved checkpoints found"
 RUN_DIR = (
     ROOT
     / "runs"
-    / "20261121_132717_22f682"
+    / "20261121_185427_e291f3"
 )
 
 assert RUN_DIR.exists(), "Run directory not found"
@@ -129,6 +132,10 @@ print(f"Recall    : {recall * 100:.2f}%")
 
 
 metrics = calculate_metrics(cm)
+clinical_3_dice = sum(
+    metrics["dice_per_class"][i]
+    for i in (2, 3, 4)
+) / 3
 
 # 5. Baca hasil yang tersimpan saat training
 records = [
@@ -144,11 +151,153 @@ saved_metrics = next(
     if row["epoch"] == checkpoint["epoch"]
 )
 
+print("\nCLINICAL 3 DICE VERIFICATION")
+print("-" * 50)
+
+logged_clinical = saved_metrics["clinical_3_dice"]
+
+print(
+    f"Logged   : {logged_clinical * 100:.4f}%"
+)
+print(
+    f"Reloaded : {clinical_3_dice * 100:.4f}%"
+)
+
+assert abs(
+    logged_clinical - clinical_3_dice
+) < 1e-6
+
 # 6. Bandingkan
 expected = saved_metrics["macro_tissue_dice"]
 actual = metrics["macro_tissue_dice"]
 
 print("CHECKPOINT INTEGRITY TEST")
+
+# Evaluasi berdasarkan pasien
+patient_indices = defaultdict(list)
+
+for index, (image_path, mask_path) in enumerate(
+    dataset.samples
+):
+    patient_id = image_path.parent.name
+    patient_indices[patient_id].append(index)
+
+print("\nPER-PATIENT EVALUATION")
+print("=" * 65)
+
+
+# Bandingkan V0.2 dengan V0.3 pada pasien yang sama
+baseline_checkpoint = torch.load(
+    CHECKPOINT_V02,
+    map_location="cpu",
+    weights_only=True
+)
+
+baseline_model = build_model()
+
+baseline_model.load_state_dict(
+    baseline_checkpoint["model_state"]
+)
+
+baseline_model.to(device)
+baseline_model.eval()
+
+print("\nV0.2 VS V0.3 — PER-PATIENT NECROTIC DICE")
+print("=" * 65)
+
+for patient_id, indices in sorted(
+    patient_indices.items()
+):
+    patient_loader = DataLoader(
+        Subset(dataset, indices),
+        batch_size=2,
+        shuffle=False
+    )
+
+    # Evaluasi model lama
+    cm_v02 = evaluate_model(
+        baseline_model, patient_loader, device
+    )
+
+    # Evaluasi model baru
+    cm_v03 = evaluate_model(
+        model, patient_loader, device
+    )
+
+    necrotic_gt = cm_v03[4, :].sum().item()
+
+    if necrotic_gt == 0:
+        print(f"{patient_id}: N/A (No Necrotic)")
+        continue
+
+    dice_v02 = (
+        calculate_metrics(cm_v02)["dice_per_class"][4]
+        * 100
+    )
+
+    dice_v03 = (
+        calculate_metrics(cm_v03)["dice_per_class"][4]
+        * 100
+    )
+
+    difference = dice_v03 - dice_v02
+
+    print(
+        f"{patient_id:12} | "
+        f"V0.2: {dice_v02:6.2f}% | "
+        f"V0.3: {dice_v03:6.2f}% | "
+        f"Delta: {difference:+6.2f} pp"
+    )
+
+
+for patient_id, indices in sorted(patient_indices.items()):
+
+    patient_dataset = Subset(dataset, indices)
+
+    patient_loader = DataLoader(
+        patient_dataset,
+        batch_size=2,
+        shuffle=False
+    )
+
+    patient_cm = evaluate_model(
+        model,
+        patient_loader,
+        device
+    )
+
+    patient_metrics = calculate_metrics(patient_cm)
+
+    # Necrotic = kelas 4
+    necrotic_gt = patient_cm[4, :].sum().item()
+    necrotic_tp = patient_cm[4, 4].item()
+
+    if necrotic_gt > 0:
+        necrotic_dice = (
+            patient_metrics["dice_per_class"][4] * 100
+        )
+
+        necrotic_recall = (
+            necrotic_tp / necrotic_gt * 100
+        )
+
+        print(
+            f"{patient_id} | "
+            f"Images: {len(indices)} | "
+            f"Nec GT: {necrotic_gt:,} | "
+            f"Dice: {necrotic_dice:.2f}% | "
+            f"Recall: {necrotic_recall:.2f}%"
+        )
+    else:
+        print(
+            f"{patient_id} | "
+            f"Images: {len(indices)} | "
+            f"Nec GT: 0 | "
+            f"Dice: N/A | Recall: N/A"
+        )
+
+print("\nTotal validation patients:", len(patient_indices))
+
 print("=" * 50)
 
 print("Checkpoint:", checkpoint_path.name)
@@ -165,3 +314,51 @@ assert abs(
 ) < 1e-6
 
 print("\nCHECKPOINT INTEGRITY: PASS")
+
+
+# Evaluasi lokalisasi luka per pasien
+print("\nWOUND LOCALIZATION — PER PATIENT")
+print("=" * 75)
+
+for patient_id, indices in sorted(
+    patient_indices.items()
+):
+    patient_loader = DataLoader(
+        Subset(dataset, indices),
+        batch_size=2,
+        shuffle=False
+    )
+
+    cm_v02 = evaluate_model(
+        baseline_model, patient_loader, device
+    )
+
+    cm_v03 = evaluate_model(
+        model, patient_loader, device
+    )
+
+    # Seluruh kelas jaringan = 1 sampai 5
+    gt_wound = cm_v03[1:6, :].sum().item()
+
+    # GT luka yang diprediksi sebagai jaringan luka
+    detected_v02 = cm_v02[1:6, 1:6].sum().item()
+    detected_v03 = cm_v03[1:6, 1:6].sum().item()
+
+    recall_v02 = (
+        100 * detected_v02 / gt_wound
+        if gt_wound > 0 else 0
+    )
+
+    recall_v03 = (
+        100 * detected_v03 / gt_wound
+        if gt_wound > 0 else 0
+    )
+
+    delta = recall_v03 - recall_v02
+
+    print(
+        f"{patient_id:12} | "
+        f"V0.2: {recall_v02:6.2f}% | "
+        f"V0.3: {recall_v03:6.2f}% | "
+        f"Delta: {delta:+7.2f} pp"
+    )
