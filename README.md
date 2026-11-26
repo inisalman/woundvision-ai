@@ -1,24 +1,24 @@
 # WoundVision AI
 
-Experimental wound tissue segmentation REST API powered by **U-Net ResNet34 (`V5-Augmented`)** running on **ONNX Runtime** (CPU, ~272 MB peak RAM).
+Experimental wound tissue segmentation REST API powered by **V6 Two-Stage U-Net (`ResNet18` Binary Wound Localizer + `ResNet34` ROI Tissue Segmenter)** running on **ONNX Runtime** (CPU, zero PyTorch in production).
 
-## Model Summary
-- **Version**: `V5-Augmented`
-- **Architecture**: U-Net (ResNet34 encoder)
-- **Runtime**: ONNX Runtime (CPU, FP32, `93.22 MB`, 100% pixel parity vs PyTorch)
-- **Classes**: `background`, `epithelial`, `slough`, `granulation`, `necrotic`, `other`
+## Model Comparison (LUTSeg Validation — 30 images, patient-level split)
+| Metric | `V5-Augmented` (Single-Stage) | **`V6-TwoStage`** *(Current)* | Delta |
+| :--- | :---: | :---: | :---: |
+| **Pixel Accuracy** | `90.54%` | **`92.19%`** | `+1.65%` |
+| **Wound Dice (Binary)** | `81.18%` | **`85.94%`** | `+4.76%` |
+| **Clinical-3 Macro Dice** *(Slough / Granulation / Necrotic)* | `59.45%` | **`64.04%`** | `+4.59%` |
+| **Macro Tissue Dice (5 classes)** | `43.16%` | **`47.04%`** | `+3.88%` |
+| Granulation Dice | `74.89%` | **`78.02%`** | `+3.13%` |
+| Necrotic Dice | `60.91%` | **`65.91%`** | `+5.00%` |
+| Slough Dice | `42.54%` | **`48.18%`** | `+5.64%` |
+| Epithelial Dice | `37.43%` | **`43.09%`** | `+5.66%` |
+| Normal Skin False Positive Rate | — | **`0.0%`** | — |
 
-### Validation Metrics (LUTSeg, 30 images, patient-level split)
-| Metric | Score |
-| :--- | :---: |
-| Pixel Accuracy | `90.54%` |
-| Wound Dice (Binary) | `81.18%` |
-| Clinical-3 Macro Dice (Slough / Granulation / Necrotic) | `59.45%` |
-| Macro Tissue Dice (5 tissue classes) | `43.16%` |
-| Granulation Dice | `74.89%` |
-| Necrotic Dice | `60.91%` |
-| Slough Dice | `42.54%` |
-| Epithelial Dice | `37.43%` |
+## Architecture
+1. **Stage 1 (`woundvision_v6_stage1_wound.onnx`, `54.66 MB`)**: `U-Net ResNet18` (`320×320`, H-Flip TTA) localizes the wound boundary and rejects healthy skin (`0.0%` FPR).
+2. **ROI Auto-Crop**: Expands the Stage 1 bounding box into a square ROI (`+18%` margin) to boost effective tissue resolution by 3–5×.
+3. **Stage 2 (`woundvision_v6_stage2_tissue.onnx`, `93.22 MB`)**: `U-Net ResNet34` (`320×320`) classifies tissue classes (`epithelial`, `slough`, `granulation`, `necrotic`, `other`) inside the wound bed.
 
 ## API Endpoints
 - `GET /` — Service metadata
@@ -28,22 +28,15 @@ Experimental wound tissue segmentation REST API powered by **U-Net ResNet34 (`V5
   - Optional header: `X-API-Key` (enforced when `API_KEY` env var is set)
 
 ## Quick Deploy (Docker / Easypanel)
-1. Set environment variables (see `.env.example`):
-   - `PORT=7860`
-   - `CORS_ORIGINS=https://your-web-domain.com`
-   - `API_KEY=your-secret-key`
-   - `MODEL_URL=https://huggingface.co/salmanid/woundvision-ai/resolve/main/woundvision_v5_augmented.onnx`
-   - `ORT_INTRA_THREADS=2`
-2. Mount a persistent volume to `/app/models` so the ONNX file is cached across restarts.
-3. Build with `Dockerfile` (recommended container limits: `768 MB` RAM, `2` vCPU).
+1. Mount a persistent **Volume** to `/app/models` (ONNX weights auto-download once from `salmanid/woundvision-ai` on Hugging Face).
+2. Set `PORT=7860`, `CORS_ORIGINS`, `API_KEY`, and `ORT_INTRA_THREADS=2` (recommended container limit: `1024 MB` RAM, `2` vCPU).
+3. Build with `Dockerfile`.
 
 ## Dataset, Attribution & Citation
-This model was trained and evaluated using the **[LUTSeg](https://huggingface.co/datasets/ksanchez84/LUTSeg)** dataset, released under the **[Creative Commons Attribution 4.0 International License (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/)**.
-
-- **Dataset**: [ksanchez84/LUTSeg](https://huggingface.co/datasets/ksanchez84/LUTSeg) (*LUTSeg: A Longitudinal Multi-Expert Dataset for Ulcer Tissue Segmentation*, Eleventh ISIC Skin Image Analysis Workshop @ MICCAI 2026)
-- **Paper**: [LUTSeg Paper (Hugging Face Papers)](https://huggingface.co/papers/2608.25866)
-- **Source Images**: [CO2Wounds Dataset](https://data.mendeley.com/datasets/nkw5gx57hw/1) ([DOI: 10.1016/j.compbiomed.2023.107753](https://doi.org/10.1016/j.compbiomed.2023.107753))
-- **Dataset License**: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+- **Primary Multi-Class Tissue Dataset**: **[LUTSeg](https://huggingface.co/datasets/ksanchez84/LUTSeg)** (*LUTSeg: A Longitudinal Multi-Expert Dataset for Ulcer Tissue Segmentation*, Eleventh ISIC Skin Image Analysis Workshop @ MICCAI 2026) — licensed under **[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)** ([Paper](https://huggingface.co/papers/2608.25866)). Source images originate from **[CO2Wounds](https://data.mendeley.com/datasets/nkw5gx57hw/1)** ([DOI: 10.1016/j.compbiomed.2023.107753](https://doi.org/10.1016/j.compbiomed.2023.107753)).
+- **Stage 1 Research Track Auxiliary Datasets**:
+  - [praveen202/DFU_Datasets](https://huggingface.co/datasets/praveen202/DFU_Datasets) (FUSeg 2021 & DFUC2022 research reference cohorts — research/non-commercial demo use)
+  - [rupeshsah/wound](https://huggingface.co/datasets/rupeshsah/wound) (`normal_*.png` healthy skin hard negatives, Apache 2.0)
 
 ## Disclaimer
 Experimental research prototype. Not clinically validated, not a medical device, and not intended for diagnosis or clinical treatment decisions.

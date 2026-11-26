@@ -1,4 +1,4 @@
-"""Production FastAPI server for WoundVision AI (ONNX Runtime)."""
+"""Production FastAPI server for WoundVision AI V6-TwoStage (ONNX Runtime)."""
 
 from contextlib import asynccontextmanager
 from io import BytesIO
@@ -35,11 +35,11 @@ def _parse_cors_origins() -> list[str]:
 CORS_ORIGINS = _parse_cors_origins()
 
 
-# 1. Load ONNX model once at startup
+# 1. Load Two-Stage ONNX models once at startup
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.model = load_model()
-    print(f"WoundVision AI ONNX model ready on {DEVICE}!")
+    print(f"WoundVision AI V6-TwoStage ONNX models ready on {DEVICE}!", flush=True)
     yield
     app.state.model = None
 
@@ -47,8 +47,8 @@ async def lifespan(app: FastAPI):
 # 2. Initialize FastAPI
 app = FastAPI(
     title="WoundVision AI",
-    description="Wound Tissue Segmentation API (U-Net ResNet34 / ONNX Runtime)",
-    version="5.0.0",
+    description="Wound Tissue Segmentation API (Two-Stage U-Net ResNet18 + ResNet34 / ONNX Runtime)",
+    version="6.0.0",
     lifespan=lifespan,
 )
 
@@ -73,8 +73,8 @@ def _verify_api_key(x_api_key: str | None) -> None:
 def root():
     return {
         "name": "WoundVision AI",
-        "version": "V5-Augmented",
-        "architecture": "U-Net ResNet34",
+        "version": "V6-TwoStage",
+        "architecture": "Two-Stage U-Net (ResNet18 + ResNet34)",
         "runtime": "onnxruntime",
         "status": "running",
         "experimental": True,
@@ -88,6 +88,7 @@ def health():
     payload = {
         "status": "healthy" if loaded else "unhealthy",
         "model_loaded": loaded,
+        "model_version": "V6-TwoStage",
         "runtime": "onnxruntime",
         "device": str(DEVICE),
     }
@@ -128,7 +129,7 @@ def predict_wound(
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError):
         raise HTTPException(status_code=400, detail="Invalid or unsupported image")
 
-    # Run ONNX segmentation
+    # Run Two-Stage ONNX segmentation
     t0 = time.perf_counter()
     mask = predict(app.state.model, image)
     inference_ms = round((time.perf_counter() - t0) * 1000.0, 2)
@@ -147,7 +148,7 @@ def predict_wound(
 
     return {
         "success": True,
-        "model_version": "V5-Augmented",
+        "model_version": "V6-TwoStage",
         "inference_ms": inference_ms,
         "analysis": analysis,
         "overlay": overlay_data_url,
