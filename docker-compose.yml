@@ -1,0 +1,30 @@
+services:
+  woundvision-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: woundvision-ai:v5-onnx
+    container_name: woundvision-ai
+    restart: unless-stopped
+    ports:
+      - "${PORT:-7860}:7860"
+    environment:
+      PORT: "7860"
+      CORS_ORIGINS: "${CORS_ORIGINS:-*}"
+      API_KEY: "${API_KEY:-}"
+      MODEL_PATH: "/app/models/woundvision_v5_augmented.onnx"
+      MODEL_URL: "${MODEL_URL:-}"
+      MODEL_AUTH_TOKEN: "${MODEL_AUTH_TOKEN:-}"
+      ORT_INTRA_THREADS: "${ORT_INTRA_THREADS:-2}"
+      ORT_INTER_THREADS: "${ORT_INTER_THREADS:-1}"
+    volumes:
+      - ./models:/app/models
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 768M
+        reservations:
+          memory: 256M
+    mem_limit: 768m
+    cpus: 2.0

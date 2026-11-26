@@ -1,73 +1,30 @@
-<CodeBlock language="markdown" editable>
 # WoundVision AI
 
+Experimental wound tissue segmentation REST API powered by **U-Net ResNet34 (`V5-Augmented`)** running on **ONNX Runtime** (CPU, ~272 MB peak RAM).
 
-AI-powered wound tissue segmentation research prototype.
-Overview
-WoundVision AI explores deep learning for segmentation
-of wound tissue using PyTorch and U-Net ResNet34.
-Tissue Classes
-- Background
-- Epithelial
-- Slough
-- Granulation
-- Necrotic
-- Other
-Baseline Results
-Validation: 30 images (patient-level split)
-Metric	V0.1	V0.2
-Macro Tissue Dice	24.18%	26.94%
-Wound Dice	76.88%	78.69%
+## Model Summary
+- **Version**: `V5-Augmented`
+- **Architecture**: U-Net (ResNet34 encoder)
+- **Runtime**: ONNX Runtime (CPU, FP32, 93.22 MB)
+- **Validation (`clinical_3_dice`)**: `59.45%` (Granulation `74.89%`, Necrotic `60.91%`, Slough `42.54%`)
+- **Classes**: `background`, `epithelial`, `slough`, `granulation`, `necrotic`, `other`
 
-Technology
-- Python
-- PyTorch
-- segmentation-models-pytorch
-- Gradio
-Disclaimer
-Research prototype only. Not clinically validated.
-Not intended for diagnosis or treatment decisions.
-</CodeBlock>
+## API Endpoints
+- `GET /` — Service metadata
+- `GET /health` — Health & model readiness check (`200` when ready, `503` otherwise)
+- `POST /predict` — Upload wound image (`multipart/form-data`, field `file`)
+  - Optional query params: `opacity` (`0.0`–`1.0`, default `0.5`), `include_overlay` (`true`/`false`, default `true`)
+  - Optional header: `X-API-Key` (enforced when `API_KEY` env var is set)
 
-Lalu jalankan:
+## Quick Deploy (Docker / Easypanel)
+1. Set environment variables (see `.env.example`):
+   - `PORT=7860`
+   - `CORS_ORIGINS=https://your-web-domain.com`
+   - `API_KEY=your-secret-key`
+   - `MODEL_URL=https://huggingface.co/salmanid/woundvision-ai/resolve/main/woundvision_v5_augmented.onnx`
+   - `ORT_INTRA_THREADS=2`
+2. Mount a persistent volume to `/app/models` so the ONNX file is cached across restarts.
+3. Build with `Dockerfile` (recommended container limits: `768 MB` RAM, `2` vCPU).
 
-<CodeBlock language="powershell" editable>
-git add .gitignore README.md
-
-git diff --cached --stat
-
-git commit -m "chore: initialize WoundVision AI repository"
-
-git status
-</CodeBlock>
-
-Kita sengaja belum memasukkan notebook dan app.py ke commit pertama. Keduanya akan kita audit dan rapikan terlebih dahulu.
-Setelah ini, kita mulai refactoring
-Berikut urutan yang gua sarankan:
-
-<box gap={2}>
-  <row align="center" gap={2}>
-    <icon name="check-circle-2" color="success"/>
-    <text>Repository dan struktur folder</text>
-  </row>
-  <row align="center" gap={2}>
-    <icon name="check-circle-2" color="success"/>
-    <text>Backup notebook dan checkpoint</text>
-  </row>
-  <row align="center" gap={2}>
-    <icon name="circle-dot" color="info"/>
-    <text>Commit pertama Git — sekarang</text>
-  </row>
-  <row align="center" gap={2}>
-    <icon name="circle" color="secondary"/>
-    <text>Refactoring `model.py` dan `data.py`</text>
-  </row>
-  <row align="center" gap={2}>
-    <icon name="circle" color="secondary"/>
-    <text>Evaluasi checkpoint V0.1 dan V0.2 di Windows</text>
-  </row>
-  <row align="center" gap={2}>
-    <icon name="circle" color="secondary"/>
-    <text>Push ke GitHub</text>
-  </row>
-</box>
+## Disclaimer
+Experimental research prototype. Not clinically validated and not intended for diagnosis or clinical decision-making.

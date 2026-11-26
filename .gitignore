@@ -1,7 +1,9 @@
 .venv/
 data/
-models/
+models/*
+!models/.gitkeep
 *.pth
+*.onnx
 __pycache__/
 .env
 runs/
