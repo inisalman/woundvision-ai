@@ -14,3 +14,4 @@ demo.py
 test_overlay.png
 .env
 .DS_Store
+telemetry/

@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 import os
+import time
 import urllib.request
 import numpy as np
 from PIL import Image, ImageOps
@@ -59,6 +60,19 @@ DEVICE = "cpu (onnxruntime)"
 class TwoStageModel:
     stage1: ort.InferenceSession
     stage2: ort.InferenceSession
+
+
+@dataclass
+class PredictionResult:
+    mask: np.ndarray
+    stage1_ms: float
+    stage2_ms: float
+    inference_ms: float
+    stage1_max_prob: float
+    stage1_mean_prob: float | None
+    stage2_confidence: float | None
+    stage2_entropy: float | None
+    stage2_ran: bool
 
 
 def _ensure_model_file(model_path: Path, model_url: str) -> Path:
@@ -134,6 +148,12 @@ def _sigmoid(x: np.ndarray) -> np.ndarray:
     return 1.0 / (1.0 + np.exp(-np.clip(x, -30.0, 30.0)))
 
 
+def _softmax(x: np.ndarray, axis: int = 0) -> np.ndarray:
+    shifted = x - np.max(x, axis=axis, keepdims=True)
+    exp = np.exp(shifted)
+    return exp / np.clip(np.sum(exp, axis=axis, keepdims=True), 1e-12, None)
+
+
 def _compute_square_roi(binary_mask: np.ndarray, margin: float = ROI_MARGIN):
     ys, xs = np.where(binary_mask)
     if len(xs) < MIN_WOUND_PIXELS:
@@ -156,31 +176,51 @@ def _compute_square_roi(binary_mask: np.ndarray, margin: float = ROI_MARGIN):
 
 
 # 4. Two-Stage Segmentation prediction
-def predict(model: TwoStageModel, image: Image.Image) -> np.ndarray:
+def predict_with_telemetry(model: TwoStageModel, image: Image.Image) -> PredictionResult:
+    """Run Two-Stage ONNX segmentation and return mask alongside timing & confidence metrics."""
+    t_total_start = time.perf_counter()
     orig = ImageOps.exif_transpose(image).convert("RGB")
 
     # Stage 1: Binary wound localization with sequential H-Flip TTA (low-RAM b=1)
+    t_s1_start = time.perf_counter()
     x1 = preprocess_image(orig, STAGE1_SIZE)
     s1_in_name = model.stage1.get_inputs()[0].name
     l1_orig = model.stage1.run(None, {s1_in_name: x1})[0]
     l1_flip = model.stage1.run(None, {s1_in_name: np.ascontiguousarray(x1[:, :, :, ::-1])})[0]
     p1 = 0.5 * (_sigmoid(l1_orig[0, 0]) + _sigmoid(l1_flip[0, 0])[:, ::-1])
 
+    s1_pos = p1 >= STAGE1_THRESHOLD
+    stage1_max_prob = round(float(p1.max()), 4)
+    stage1_mean_prob = round(float(p1[s1_pos].mean()), 4) if np.any(s1_pos) else None
+
     s1_bin = (
         np.asarray(
-            Image.fromarray((p1 >= STAGE1_THRESHOLD).astype(np.uint8) * 255).resize(
+            Image.fromarray(s1_pos.astype(np.uint8) * 255).resize(
                 orig.size, Image.Resampling.NEAREST
             )
         )
         > 127
     )
+    stage1_ms = round((time.perf_counter() - t_s1_start) * 1000.0, 2)
 
     full_mask = np.zeros((orig.height, orig.width), dtype=np.uint8)
     box = _compute_square_roi(s1_bin, margin=ROI_MARGIN)
     if box is None:
-        return full_mask
+        inference_ms = round((time.perf_counter() - t_total_start) * 1000.0, 2)
+        return PredictionResult(
+            mask=full_mask,
+            stage1_ms=stage1_ms,
+            stage2_ms=0.0,
+            inference_ms=inference_ms,
+            stage1_max_prob=stage1_max_prob,
+            stage1_mean_prob=None,
+            stage2_confidence=None,
+            stage2_entropy=None,
+            stage2_ran=False,
+        )
 
     # Crop square ROI (preserve aspect ratio with zero padding)
+    t_s2_start = time.perf_counter()
     x1b, y1b, x2b, y2b = box
     crop = orig.crop((x1b, y1b, x2b, y2b))
     cw, ch = crop.size
@@ -195,14 +235,59 @@ def predict(model: TwoStageModel, image: Image.Image) -> np.ndarray:
     x2 = preprocess_image(sq_img, STAGE2_SIZE)
     s2_in_name = model.stage2.get_inputs()[0].name
     l2 = model.stage2.run(None, {s2_in_name: x2})[0]
-    tissue_pred = (l2[0, 1:NUM_CLASSES].argmax(axis=0) + 1).astype(np.uint8)
+    tissue_logits = l2[0, 1:NUM_CLASSES]
+    tissue_pred = (tissue_logits.argmax(axis=0) + 1).astype(np.uint8)
 
     sq_pred = np.asarray(
         Image.fromarray(tissue_pred).resize((sq_side, sq_side), Image.Resampling.NEAREST)
     )
     full_mask[y1b:y2b, x1b:x2b] = sq_pred[pad_t : pad_t + ch, pad_l : pad_l + cw]
     full_mask[~s1_bin] = 0
-    return full_mask
+
+    # Compute Stage 2 tissue confidence & normalized entropy within Stage 1 wound mask
+    s1_crop_mask = s1_bin[y1b:y2b, x1b:x2b]
+    sq_s1 = np.zeros((sq_side, sq_side), dtype=np.uint8)
+    sq_s1[pad_t : pad_t + ch, pad_l : pad_l + cw] = s1_crop_mask.astype(np.uint8) * 255
+    s1_at_s2 = (
+        np.asarray(
+            Image.fromarray(sq_s1).resize(
+                (STAGE2_SIZE, STAGE2_SIZE), Image.Resampling.NEAREST
+            )
+        )
+        > 127
+    )
+
+    stage2_confidence: float | None = None
+    stage2_entropy: float | None = None
+    if np.any(s1_at_s2):
+        tissue_probs = _softmax(tissue_logits, axis=0)
+        max_probs = tissue_probs.max(axis=0)
+        stage2_confidence = round(float(max_probs[s1_at_s2].mean()), 4)
+
+        num_tissue_classes = NUM_CLASSES - 1
+        entropy = -(
+            tissue_probs * np.log(np.clip(tissue_probs, 1e-7, 1.0))
+        ).sum(axis=0) / np.log(float(num_tissue_classes))
+        stage2_entropy = round(float(entropy[s1_at_s2].mean()), 4)
+
+    stage2_ms = round((time.perf_counter() - t_s2_start) * 1000.0, 2)
+    inference_ms = round((time.perf_counter() - t_total_start) * 1000.0, 2)
+
+    return PredictionResult(
+        mask=full_mask,
+        stage1_ms=stage1_ms,
+        stage2_ms=stage2_ms,
+        inference_ms=inference_ms,
+        stage1_max_prob=stage1_max_prob,
+        stage1_mean_prob=stage1_mean_prob,
+        stage2_confidence=stage2_confidence,
+        stage2_entropy=stage2_entropy,
+        stage2_ran=True,
+    )
+
+
+def predict(model: TwoStageModel, image: Image.Image) -> np.ndarray:
+    return predict_with_telemetry(model, image).mask
 
 
 # Tissue color mapping

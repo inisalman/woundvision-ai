@@ -12,6 +12,11 @@ services:
       PORT: "7860"
       CORS_ORIGINS: "${CORS_ORIGINS:-*}"
       API_KEY: "${API_KEY:-}"
+      METRICS_API_KEY: "${METRICS_API_KEY:-}"
+      METRICS_ENABLED: "${METRICS_ENABLED:-true}"
+      ENABLE_JSON_LOGS: "${ENABLE_JSON_LOGS:-true}"
+      METRICS_DB_PATH: "${METRICS_DB_PATH:-/app/telemetry/metrics.db}"
+      METRICS_RETENTION_DAYS: "${METRICS_RETENTION_DAYS:-90}"
       STAGE1_MODEL_PATH: "/app/models/woundvision_v6_stage1_wound.onnx"
       STAGE2_MODEL_PATH: "/app/models/woundvision_v6_stage2_tissue.onnx"
       STAGE1_MODEL_URL: "${STAGE1_MODEL_URL:-https://huggingface.co/salmanid/woundvision-ai/resolve/main/woundvision_v6_stage1_wound.onnx}"
@@ -21,6 +26,7 @@ services:
       ORT_INTER_THREADS: "${ORT_INTER_THREADS:-1}"
     volumes:
       - ./models:/app/models
+      - ./telemetry:/app/telemetry
     deploy:
       resources:
         limits:

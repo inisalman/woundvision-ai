@@ -7,7 +7,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     ORT_INTRA_THREADS=2 \
     ORT_INTER_THREADS=1 \
     STAGE1_MODEL_PATH=/app/models/woundvision_v6_stage1_wound.onnx \
-    STAGE2_MODEL_PATH=/app/models/woundvision_v6_stage2_tissue.onnx
+    STAGE2_MODEL_PATH=/app/models/woundvision_v6_stage2_tissue.onnx \
+    METRICS_ENABLED=true \
+    ENABLE_JSON_LOGS=true \
+    METRICS_DB_PATH=/app/telemetry/metrics.db
 
 # Create non-root user with UID 1000
 RUN useradd --create-home --uid 1000 --shell /bin/bash user
@@ -19,8 +22,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code and models directory
-COPY --chown=user:user inference.py app.py ./
+COPY --chown=user:user inference.py monitoring.py app.py ./
 COPY --chown=user:user models/ ./models/
+RUN mkdir -p /app/telemetry && chown user:user /app/telemetry
 
 USER user
 ENV HOME=/home/user \

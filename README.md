@@ -22,15 +22,19 @@ Experimental wound tissue segmentation REST API powered by **V6 Two-Stage U-Net 
 
 ## API Endpoints
 - `GET /` — Service metadata
-- `GET /health` — Health & model readiness check (`200` when ready, `503` otherwise)
+- `GET /health` — Health, model readiness, uptime, and RSS memory check (`200` when ready, `503` otherwise)
 - `POST /predict` — Upload wound image (`multipart/form-data`, field `file`)
   - Optional query params: `opacity` (`0.0`–`1.0`, default `0.5`), `include_overlay` (`true`/`false`, default `true`)
   - Optional header: `X-API-Key` (enforced when `API_KEY` env var is set)
+  - Returns `request_id`, `timings_ms` (`decode`, `stage1`, `stage2`, `inference`, `overlay`, `total`), `confidence` (`stage1_max_prob`, `stage1_mean_prob`, `stage2_confidence`, `stage2_entropy`), `analysis`, and optional `overlay`
+- `GET /metrics/summary` — Rolling performance & drift summary (`hours` query param, default `24`, `0` = all-time; protected by `METRICS_API_KEY` or `API_KEY`)
+- `GET /metrics/recent` — Recent prediction metadata events (`limit`, `only_errors`, `low_confidence_only`; protected by `METRICS_API_KEY` or `API_KEY`)
 
 ## Quick Deploy (Docker / Easypanel)
 1. Mount a persistent **Volume** to `/app/models` (ONNX weights auto-download once from `salmanid/woundvision-ai` on Hugging Face).
-2. Set `PORT=7860`, `CORS_ORIGINS`, `API_KEY`, and `ORT_INTRA_THREADS=2` (recommended container limit: `1024 MB` RAM, `2` vCPU).
-3. Build with `Dockerfile`.
+2. *(Optional for persistent telemetry)* Mount a second volume to `/app/telemetry` **or** set `METRICS_DB_PATH=/app/models/metrics.db` to reuse the existing volume.
+3. Set `PORT=7860`, `CORS_ORIGINS`, `API_KEY`, `METRICS_API_KEY`, and `ORT_INTRA_THREADS=2` (recommended container limit: `1024 MB` RAM, `2` vCPU).
+4. Build with `Dockerfile`.
 
 ## Dataset, Attribution & Citation
 - **Primary Multi-Class Tissue Dataset**: **[LUTSeg](https://huggingface.co/datasets/ksanchez84/LUTSeg)** (*LUTSeg: A Longitudinal Multi-Expert Dataset for Ulcer Tissue Segmentation*, Eleventh ISIC Skin Image Analysis Workshop @ MICCAI 2026) — licensed under **[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)** ([Paper](https://huggingface.co/papers/2608.25866)). Source images originate from **[CO2Wounds](https://data.mendeley.com/datasets/nkw5gx57hw/1)** ([DOI: 10.1016/j.compbiomed.2023.107753](https://doi.org/10.1016/j.compbiomed.2023.107753)).
